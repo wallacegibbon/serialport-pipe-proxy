@@ -66,6 +66,7 @@ enum serialport_fsm_state {FSM_WAITING_FOR_START, FSM_NORMAL, FSM_END};
 
 struct serialport_fsm {
 	unsigned char buffer[SERIALPORT_READ_BUFFER_SIZE + 1];
+	int cursor;
 	int buffer_end;
 	enum serialport_fsm_state state;
 	int use_detector;
@@ -86,32 +87,44 @@ void s_fsm_initialize(struct serialport_fsm *self, const char *start_string, con
 		self->state = FSM_NORMAL;
 		self->use_detector = 0;
 	}
-
+	self->cursor = 0;
 	self->start_string = start_string;
 	self->end_string = end_string;
 }
 
 int s_fsm_wait_for_start(struct serialport_fsm *self) {
-	int r = sd_feed(&self->detector, self->buffer, self->buffer_end);
-	if (r < 0)
-		return 0;
+	unsigned char *s = self->buffer + self->cursor;
+	struct feed_result r;
 
-	printf("%s", self->start_string);
+	r = sd_feed(&self->detector, s, self->buffer_end);
+	if (r.start < 0) {
+		self->cursor = self->buffer_end;
+		return 0;
+	}
+
+	fwrite(s + r.start, 1, r.end - r.start, stdout);
+
+	self->cursor += r.end;
 	self->state = FSM_NORMAL;
 	sd_initialize(&self->detector, self->end_string);
 	return 0;
 }
 
 int s_fsm_normal(struct serialport_fsm *self) {
-	int r;
+	unsigned char *s = self->buffer + self->cursor;
+	struct feed_result r;
+	int size = self->buffer_end - self->cursor;
+
 	if (self->use_detector) {
-		r = sd_feed(&self->detector, self->buffer, self->buffer_end);
-		if (r > 0) {
-			self->buffer[r] = '\0';
+		r = sd_feed(&self->detector, s, self->buffer_end);
+		if (r.start > 0) {
+			size = r.end;
 			self->state = FSM_END;
+		} else {
+			self->cursor = self->buffer_end;
 		}
 	}
-	printf("%s", self->buffer);
+	fwrite(s, 1, size, stdout);
 	return 0;
 }
 
@@ -119,8 +132,14 @@ int s_fsm_step(struct serialport_fsm *self) {
 	if (self->state == FSM_END)
 		return 1;
 
-	self->buffer_end = sp_blocking_read(port, self->buffer, SERIALPORT_READ_BUFFER_SIZE, 100);
-	self->buffer[self->buffer_end] = '\0';
+	if (self->buffer_end == 0 || self->cursor == self->buffer_end) {
+		self->cursor = 0;
+		self->buffer_end = sp_blocking_read(port, self->buffer, SERIALPORT_READ_BUFFER_SIZE, 100);
+		if (self->buffer_end < 0)
+			exit_info(11, "failed reading from serial port\n");
+
+		self->buffer[self->buffer_end] = '\0';
+	}
 
 	switch (self->state) {
 	case FSM_WAITING_FOR_START:
@@ -131,34 +150,26 @@ int s_fsm_step(struct serialport_fsm *self) {
 }
 
 void *serialport_data_handler(struct application_params *app_params) {
-	int waiting_for_start = 1;
-	int is_active = 1;
-	struct str_detector detector;
-	int i;
-	int r;
-
 	struct serialport_fsm s_fsm;
 
 	s_fsm_initialize(&s_fsm, app_params->start_string, app_params->end_string);
 
-	while (port_active_get()) {
-		if (s_fsm_step(&s_fsm)) {
-			port_active_set(0);
+	while (port_active_get() || (s_fsm.state != FSM_END && s_fsm.cursor != s_fsm.buffer_end)) {
+		if (s_fsm_step(&s_fsm))
 			break;
-		}
 	}
+
+	port_active_set(0);
 }
 
 void *stdin_data_handler(void *data) {
-	// unsigned char buffer[STDIN_READ_BUFFER_SIZE + 1];
-	int has_more = 1;
+	unsigned char buffer[STDIN_READ_BUFFER_SIZE + 1];
 	int r;
 
-	/*
-	while (has_more && port_active_get()) {
+	while (port_active_get()) {
 		r = fread(buffer, 1, STDIN_READ_BUFFER_SIZE, stdin);
 		if (r < STDIN_READ_BUFFER_SIZE) {
-			has_more = 0;
+			port_active_set(0);
 			if (!feof(stdin) && ferror(stdin))
 				exit_info(3, "writting to serialport error: %d\n", errno);
 		}
@@ -166,23 +177,19 @@ void *stdin_data_handler(void *data) {
 		if (r < 0)
 			exit_info(2, "failed writting to serialport\n");
 	}
-	*/
 
-	/// Reading from stdin and write to serialport is mainly for debugging.
-	/// So efficiency is not the most important part.
-	while (has_more && port_active_get()) {
+	/*
+	while (port_active_get()) {
 		if (!feof(stdin)) {
-			/// TODO: this blocks, fix this
 			r = fgetc(stdin);
 			r = sp_blocking_write(port, &r, 1, 0);
 			if (r < 0)
 				exit_info(2, "failed writting to serialport\n");
 		} else {
-			has_more = 0;
+			port_active_set(0);
 		}
 	}
-
-	port_active_set(0);
+	*/
 }
 
 void initialize_port(struct application_params *app_params) {
@@ -200,7 +207,7 @@ int main(int argc, const char **argv) {
 	struct application_params params;
 
 	parse_arguments(argc, argv, &params);
-	application_params_print(&params);
+	//application_params_print(&params);
 
 	/// Open the serial port before starting serial port reading thread to avoid some error.
 	initialize_port(&params);

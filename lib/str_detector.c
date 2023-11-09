@@ -7,7 +7,8 @@ void sd_initialize(struct str_detector *self, const char *target) {
 	self->cursor = 0;
 }
 
-int sd_feed(struct str_detector *self, const char *buffer, int size) {
+struct feed_result sd_feed(struct str_detector *self, const char *buffer, int size) {
+	struct feed_result r = {-1, -1};
 	int i = 0, j = 0;
 	while (i < size && self->cursor < self->target_size) {
 		if (self->target[self->cursor] == buffer[i]) {
@@ -19,9 +20,9 @@ int sd_feed(struct str_detector *self, const char *buffer, int size) {
 		}
 	}
 
-	if (self->cursor == self->target_size)
-		return i;
-	else
-		return -1;
+	if (self->cursor == self->target_size) {
+		r.start = j;
+		r.end = i;
+	}
+	return r;
 }
-
