@@ -61,7 +61,7 @@ int port_active_get() {
 }
 
 // clang-format off
-enum serialport_fsm_state {FSM_WAITING_FOR_START, FSM_NORMAL, FSM_END};
+enum serialport_fsm_state {FSM_WAITING_FOR_START, FSM_NORMAL1, FSM_NORMAL2, FSM_END};
 // clang-format on
 
 struct serialport_fsm {
@@ -69,23 +69,20 @@ struct serialport_fsm {
 	int cursor;
 	int buffer_end;
 	enum serialport_fsm_state state;
-	int use_detector;
 	struct str_detector detector;
 	const char *start_string;
 	const char *end_string;
 };
 
 void s_fsm_initialize(struct serialport_fsm *self, const char *start_string, const char *end_string) {
-	self->use_detector = 1;
 	if (start_string != NULL) {
 		self->state = FSM_WAITING_FOR_START;
 		sd_initialize(&self->detector, start_string);
 	} else if (end_string != NULL) {
-		self->state = FSM_NORMAL;
+		self->state = FSM_NORMAL1;
 		sd_initialize(&self->detector, end_string);
 	} else {
-		self->state = FSM_NORMAL;
-		self->use_detector = 0;
+		self->state = FSM_NORMAL2;
 	}
 	self->cursor = 0;
 	self->start_string = start_string;
@@ -105,33 +102,41 @@ int s_fsm_wait_for_start(struct serialport_fsm *self) {
 	fwrite(s + r.start, 1, r.end - r.start, stdout);
 
 	self->cursor += r.end;
-	self->state = FSM_NORMAL;
-	sd_initialize(&self->detector, self->end_string);
+	if (self->end_string != NULL) {
+		self->state = FSM_NORMAL1;
+		sd_initialize(&self->detector, self->end_string);
+	} else {
+		self->state = FSM_NORMAL2;
+	}
+
 	return 0;
 }
 
-int s_fsm_normal(struct serialport_fsm *self) {
+int s_fsm_normal1(struct serialport_fsm *self) {
 	unsigned char *s = self->buffer + self->cursor;
-	struct feed_result r;
 	int size = self->buffer_end - self->cursor;
+	struct feed_result r;
 
-	if (self->use_detector) {
-		r = sd_feed(&self->detector, s, self->buffer_end);
-		if (r.start > 0) {
-			size = r.end;
-			self->state = FSM_END;
-		} else {
-			self->cursor = self->buffer_end;
-		}
+	r = sd_feed(&self->detector, s, self->buffer_end);
+	if (r.start > 0) {
+		size = r.end;
+		self->state = FSM_END;
+	} else {
+		self->cursor = self->buffer_end;
 	}
 	fwrite(s, 1, size, stdout);
 	return 0;
 }
 
-int s_fsm_step(struct serialport_fsm *self) {
-	if (self->state == FSM_END)
-		return 1;
+int s_fsm_normal2(struct serialport_fsm *self) {
+	unsigned char *s = self->buffer + self->cursor;
+	int size = self->buffer_end - self->cursor;
+	fwrite(s, 1, size, stdout);
+	return 0;
+}
 
+/// This function may call sp_blocking_read, so it can block.
+void s_fsm_fill_more(struct serialport_fsm *self) {
 	if (self->buffer_end == 0 || self->cursor == self->buffer_end) {
 		self->cursor = 0;
 		self->buffer_end = sp_blocking_read(port, self->buffer, SERIALPORT_READ_BUFFER_SIZE, 100);
@@ -140,12 +145,22 @@ int s_fsm_step(struct serialport_fsm *self) {
 
 		self->buffer[self->buffer_end] = '\0';
 	}
+}
+
+int s_fsm_step(struct serialport_fsm *self) {
+	/// extract FSM_END checking out from the switch to avoid unnecessary blocking.
+	if (self->state == FSM_END)
+		return 1;
+
+	s_fsm_fill_more(self);
 
 	switch (self->state) {
 	case FSM_WAITING_FOR_START:
 		return s_fsm_wait_for_start(self);
-	case FSM_NORMAL:
-		return s_fsm_normal(self);
+	case FSM_NORMAL1:
+		return s_fsm_normal1(self);
+	case FSM_NORMAL2:
+		return s_fsm_normal2(self);
 	}
 }
 
@@ -207,7 +222,7 @@ int main(int argc, const char **argv) {
 	struct application_params params;
 
 	parse_arguments(argc, argv, &params);
-	//application_params_print(&params);
+	// application_params_print(&params);
 
 	/// Open the serial port before starting serial port reading thread to avoid some error.
 	initialize_port(&params);
