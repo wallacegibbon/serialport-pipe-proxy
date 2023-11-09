@@ -115,11 +115,10 @@ int s_fsm_normal(struct serialport_fsm *self) {
 	return 0;
 }
 
-int s_fsm_end(struct serialport_fsm *self) {
-	return 1;
-}
-
 int s_fsm_step(struct serialport_fsm *self) {
+	if (self->state == FSM_END)
+		return 1;
+
 	self->buffer_end = sp_blocking_read(port, self->buffer, SERIALPORT_READ_BUFFER_SIZE, 100);
 	self->buffer[self->buffer_end] = '\0';
 
@@ -128,8 +127,6 @@ int s_fsm_step(struct serialport_fsm *self) {
 		return s_fsm_wait_for_start(self);
 	case FSM_NORMAL:
 		return s_fsm_normal(self);
-	case FSM_END:
-		return s_fsm_end(self);
 	}
 }
 
@@ -175,6 +172,7 @@ void *stdin_data_handler(void *data) {
 	/// So efficiency is not the most important part.
 	while (has_more && port_active_get()) {
 		if (!feof(stdin)) {
+			/// TODO: this blocks, fix this
 			r = fgetc(stdin);
 			r = sp_blocking_write(port, &r, 1, 0);
 			if (r < 0)
