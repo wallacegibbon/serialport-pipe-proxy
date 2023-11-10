@@ -109,6 +109,7 @@ void s_fsm_initialize(struct serialport_fsm *self, const char *start_string, con
 		self->state = FSM_NORMAL2;
 	}
 	self->cursor = 0;
+	self->buffer_end = 0;
 	self->start_string = start_string;
 	self->end_string = end_string;
 }
@@ -120,7 +121,7 @@ int s_fsm_wait_for_start(struct serialport_fsm *self) {
 	r = sd_feed(&self->detector, s, self->buffer_end);
 	if (r.start < 0) {
 		self->cursor = self->buffer_end;
-		return 0;
+		return 1;
 	}
 
 	fwrite(s + r.start, 1, r.end - r.start, stdout);
@@ -133,7 +134,7 @@ int s_fsm_wait_for_start(struct serialport_fsm *self) {
 		self->state = FSM_NORMAL2;
 	}
 
-	return 0;
+	return 1;
 }
 
 int s_fsm_normal1(struct serialport_fsm *self) {
@@ -143,20 +144,22 @@ int s_fsm_normal1(struct serialport_fsm *self) {
 
 	r = sd_feed(&self->detector, s, self->buffer_end);
 	if (r.start > 0) {
+		self->cursor += r.end;
 		size = r.end;
 		self->state = FSM_END;
 	} else {
 		self->cursor = self->buffer_end;
 	}
 	fwrite(s, 1, size, stdout);
-	return 0;
+	return 1;
 }
 
 int s_fsm_normal2(struct serialport_fsm *self) {
 	unsigned char *s = self->buffer + self->cursor;
 	int size = self->buffer_end - self->cursor;
+	self->cursor = self->buffer_end;
 	fwrite(s, 1, size, stdout);
-	return 0;
+	return 1;
 }
 
 /// This function may call sp_blocking_read, so it can block.
@@ -174,7 +177,7 @@ void s_fsm_fill_more(struct serialport_fsm *self) {
 int s_fsm_step(struct serialport_fsm *self) {
 	/// extract FSM_END checking out from the switch to avoid unnecessary blocking.
 	if (self->state == FSM_END)
-		return 1;
+		return 0;
 
 	s_fsm_fill_more(self);
 
@@ -188,27 +191,31 @@ int s_fsm_step(struct serialport_fsm *self) {
 	}
 }
 
+static inline int s_fsm_buffer_empty(struct serialport_fsm *self) {
+	return self->cursor == self->buffer_end;
+}
+
 void *serialport_data_handler(void *data) {
 	struct serialport_fsm s_fsm;
 
 	s_fsm_initialize(&s_fsm, app.start_string, app.end_string);
 
-	while (app_running_flag_get(&app) || (s_fsm.state != FSM_END && s_fsm.cursor != s_fsm.buffer_end)) {
-		if (s_fsm_step(&s_fsm))
-			break;
-	}
+	/// `app_running_flag_get` have to be called after `s_fsm_step`.
+	while (s_fsm_step(&s_fsm) && (!s_fsm_buffer_empty(&s_fsm) || app_running_flag_get(&app)))
+		;
 
 	app_running_flag_set(&app, 0);
 }
 
 void *stdin_data_handler(void *data) {
 	unsigned char buffer[STDIN_READ_BUFFER_SIZE + 1];
+	int has_more = 1;
 	int r;
 
-	while (app_running_flag_get(&app)) {
+	while (has_more && app_running_flag_get(&app)) {
 		r = fread(buffer, 1, STDIN_READ_BUFFER_SIZE, stdin);
 		if (r < STDIN_READ_BUFFER_SIZE) {
-			app_running_flag_set(&app, 0);
+			has_more = 0;
 			if (!feof(stdin) && ferror(stdin))
 				exit_info(3, "writting to serialport error: %d\n", errno);
 		}
@@ -217,18 +224,7 @@ void *stdin_data_handler(void *data) {
 			exit_info(2, "failed writting to serialport\n");
 	}
 
-	/*
-	while (app_running_flag_get(&app)) {
-		if (!feof(stdin)) {
-			r = fgetc(stdin);
-			r = sp_blocking_write(app.serialport, &r, 1, 0);
-			if (r < 0)
-				exit_info(2, "failed writting to serialport\n");
-		} else {
-			app_running_flag_set(&app, 0);
-		}
-	}
-	*/
+	app_running_flag_set(&app, 0);
 }
 
 typedef void *(*pthread_start_routine)(void *);
