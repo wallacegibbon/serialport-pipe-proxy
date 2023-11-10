@@ -5,8 +5,11 @@ C_INCLUDES += ./lib ./src
 
 TARGET = sp-pipe
 
-#LD_FLAGS += -lserialport -lpthread -static
 LD_FLAGS += -lserialport -lpthread
+
+ifeq ($(shell uname), Linux)
+LD_FLAGS += -static
+endif
 
 include ./miscellaneous-makefiles/simple-gcc-single.mk
 
