@@ -10,28 +10,25 @@
 #define SERIALPORT_READ_BUFFER_SIZE 4096
 #define STDIN_READ_BUFFER_SIZE 4096
 
-// clang-format off
 struct application {
 	/// parameters
-	const char				*serialport_device;
-	int					baudrate;
-	const char				*start_string;
-	const char				*end_string;
+	const char *serialport_device;
+	int baudrate;
+	const char *start_string;
+	const char *end_string;
+
 	/// running states
-	struct sp_port				*serialport;
-	int					running_flag;
-	pthread_mutex_t				running_flag_lock;
+	struct sp_port *serialport;
+	int running_flag;
+	pthread_mutex_t running_flag_lock;
 };
-// clang-format on
 
 struct application app;
 
 void app_initialize(struct application *self) {
 	int r;
-
 	pthread_mutex_init(&self->running_flag_lock, NULL);
 	self->running_flag = 1;
-
 	/// Open the serial port before starting serial port reading thread to avoid some error.
 	r = serialport_open(&self->serialport, self->serialport_device, self->baudrate);
 	if (r == -1)
@@ -86,17 +83,15 @@ void parse_arguments(int argc, const char **argv, struct application *app) {
 enum serialport_fsm_state {FSM_WAITING_FOR_START, FSM_NORMAL1, FSM_NORMAL2, FSM_END};
 // clang-format on
 
-// clang-format off
 struct serialport_fsm {
-	unsigned char			buffer[SERIALPORT_READ_BUFFER_SIZE + 1];
-	int				cursor;
-	int				buffer_end;
-	enum serialport_fsm_state	state;
-	struct str_detector		detector;
-	const char			*start_string;
-	const char			*end_string;
+	unsigned char buffer[SERIALPORT_READ_BUFFER_SIZE + 1];
+	int cursor;
+	int buffer_end;
+	enum serialport_fsm_state state;
+	struct str_detector detector;
+	const char *start_string;
+	const char *end_string;
 };
-// clang-format on
 
 void s_fsm_initialize(struct serialport_fsm *self, const char *start_string, const char *end_string) {
 	if (start_string != NULL) {
@@ -115,17 +110,16 @@ void s_fsm_initialize(struct serialport_fsm *self, const char *start_string, con
 }
 
 int s_fsm_wait_for_start(struct serialport_fsm *self) {
-	unsigned char *s = self->buffer + self->cursor;
 	struct feed_result r;
+	unsigned char *s;
 
+	s = self->buffer + self->cursor;
 	r = sd_feed(&self->detector, s, self->buffer_end);
 	if (r.start < 0) {
 		self->cursor = self->buffer_end;
 		return 1;
 	}
-
 	fwrite(s + r.start, 1, r.end - r.start, stdout);
-
 	self->cursor += r.end;
 	if (self->end_string != NULL) {
 		self->state = FSM_NORMAL1;
@@ -133,15 +127,16 @@ int s_fsm_wait_for_start(struct serialport_fsm *self) {
 	} else {
 		self->state = FSM_NORMAL2;
 	}
-
 	return 1;
 }
 
 int s_fsm_normal1(struct serialport_fsm *self) {
-	unsigned char *s = self->buffer + self->cursor;
-	int size = self->buffer_end - self->cursor;
 	struct feed_result r;
+	unsigned char *s;
+	int size;
 
+	s = self->buffer + self->cursor;
+	size = self->buffer_end - self->cursor;
 	r = sd_feed(&self->detector, s, self->buffer_end);
 	if (r.start > 0) {
 		self->cursor += r.end;
@@ -151,14 +146,19 @@ int s_fsm_normal1(struct serialport_fsm *self) {
 		self->cursor = self->buffer_end;
 	}
 	fwrite(s, 1, size, stdout);
+
 	return 1;
 }
 
 int s_fsm_normal2(struct serialport_fsm *self) {
-	unsigned char *s = self->buffer + self->cursor;
-	int size = self->buffer_end - self->cursor;
+	unsigned char *s;
+	int size;
+
+	s = self->buffer + self->cursor;
+	size = self->buffer_end - self->cursor;
 	self->cursor = self->buffer_end;
 	fwrite(s, 1, size, stdout);
+
 	return 1;
 }
 
@@ -209,9 +209,10 @@ void *serialport_data_handler(void *data) {
 
 void *stdin_data_handler(void *data) {
 	unsigned char buffer[STDIN_READ_BUFFER_SIZE + 1];
-	int has_more = 1;
+	int has_more;
 	int r;
 
+	has_more = 1;
 	while (has_more && app_running_flag_get(&app)) {
 		r = fread(buffer, 1, STDIN_READ_BUFFER_SIZE, stdin);
 		if (r < STDIN_READ_BUFFER_SIZE) {
