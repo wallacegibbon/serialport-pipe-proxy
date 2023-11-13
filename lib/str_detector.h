@@ -7,12 +7,7 @@ struct str_detector {
 	int cursor;
 };
 
-struct feed_result {
-	int start;
-	int end;
-};
-
 void sd_initialize(struct str_detector *self, const char *target);
-struct feed_result sd_feed(struct str_detector *self, const char *buffer, int size);
+struct range sd_feed(struct str_detector *self, const char *buffer, int size);
 
 #endif

@@ -1,3 +1,4 @@
+#include "range.h"
 #include "serialport.h"
 #include "str_detector.h"
 #include "util.h"
@@ -110,7 +111,7 @@ void s_fsm_initialize(struct serialport_fsm *self, const char *start_string, con
 }
 
 int s_fsm_wait_for_start(struct serialport_fsm *self) {
-	struct feed_result r;
+	struct range r;
 	unsigned char *s;
 
 	s = self->buffer + self->cursor;
@@ -131,7 +132,7 @@ int s_fsm_wait_for_start(struct serialport_fsm *self) {
 }
 
 int s_fsm_normal1(struct serialport_fsm *self) {
-	struct feed_result r;
+	struct range r;
 	unsigned char *s;
 	int size;
 
