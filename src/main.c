@@ -7,35 +7,48 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SERIALPORT_READ_BUFFER_SIZE 4096
 #define STDIN_READ_BUFFER_SIZE 4096
 
 struct application {
-	/// parameters
+	/// const parameters
 	const char *serialport_device;
 	int baudrate;
 	const char *start_string;
 	const char *end_string;
+	const char *output_file;
 
 	/// running states
 	struct sp_port *serialport;
 	int running_flag;
 	pthread_mutex_t running_flag_lock;
+	FILE *output_file_handle;
 };
 
 struct application app;
 
 void app_initialize(struct application *self) {
 	int r;
+
 	pthread_mutex_init(&self->running_flag_lock, NULL);
 	self->running_flag = 1;
+
 	/// Open the serial port before starting serial port reading thread to avoid some error.
 	r = serialport_open(&self->serialport, self->serialport_device, self->baudrate);
 	if (r == -1)
 		exit_info(r, "failed getting port by name \"%s\"\n", self->serialport_device);
 	if (r == -2)
 		exit_info(r, "failed opening port \"%s\"\n", self->serialport_device);
+
+	if (self->output_file == NULL)
+		self->output_file_handle = stdout;
+	else
+		self->output_file_handle = fopen(self->output_file, "w");
+
+	if (self->output_file_handle == NULL)
+		exit_info(3, "failed opening output file: %d\n", self->output_file);
 }
 
 void app_cleanup(struct application *self) {
@@ -44,6 +57,14 @@ void app_cleanup(struct application *self) {
 	r = sp_close(self->serialport);
 	if (r < 0)
 		exit_info(r, "failed closing port %s\n", self->serialport_device);
+
+	r = fflush(self->output_file_handle);
+	if (r)
+		exit_info(11, "failed closing output file %s\n", self->output_file);
+
+	r = fclose(self->output_file_handle);
+	if (r)
+		exit_info(12, "failed closing output file %s\n", self->output_file);
 }
 
 void app_describe(struct application *self) {
@@ -65,19 +86,104 @@ int app_running_flag_get(struct application *self) {
 	return is_active;
 }
 
+struct cmd_arguments {
+	int argc;
+	const char **argv;
+	int index;
+	const char **keys;
+	const char **values;
+	int option_count;
+};
+
+static inline int is_option(const char *s) {
+	return s[0] == '-' && s[1] == '-' && s[2] != '\0' && s[2] != '-';
+}
+
+int cmd_arguments_parse_step(struct cmd_arguments *self) {
+	if (self->index == self->argc)
+		return 0;
+
+	/// non-option arguments are ignored in this program
+	if (!is_option(self->argv[self->index])) {
+		self->index++;
+		return 1;
+	}
+
+	self->keys[self->option_count] = self->argv[self->index] + 2;
+	if (self->index == self->argc - 1 || is_option(self->argv[self->index + 1])) {
+		self->values[self->option_count] = NULL;
+		self->index++;
+	} else {
+		self->values[self->option_count] = self->argv[self->index + 1];
+		self->index += 2;
+	}
+	self->option_count++;
+	return 1;
+}
+
+/// You need to call `cmd_arguments_cleanup` to free some allocated memories.
+void cmd_arguments_prepare(struct cmd_arguments *self, int argc, const char **argv) {
+	self->argc = argc;
+	self->argv = argv;
+	self->index = 0;
+	self->keys = (const char **)malloc(sizeof(const char *) * argc);
+	self->values = (const char **)malloc(sizeof(const char *) * argc);
+	self->option_count = 0;
+
+	while (cmd_arguments_parse_step(self))
+		;
+}
+
+void cmd_arguments_cleanup(struct cmd_arguments *self) {
+	free(self->keys);
+	free(self->values);
+}
+
+const char *cmd_arguments_get(struct cmd_arguments *self, const char *key, const char *default_value) {
+	int i;
+	for (i = 0; i < self->option_count; i++) {
+		if (strcmp(self->keys[i], key) == 0 && self->values[i] != NULL)
+			return self->values[i];
+	}
+	return default_value;
+}
+
+int cmd_arguments_has(struct cmd_arguments *self, const char *key) {
+	int i;
+	for (i = 0; i < self->option_count; i++) {
+		if (strcmp(self->keys[i], key) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+void cmd_arguments_describe(struct cmd_arguments *self) {
+	int i;
+	for (i = 0; i < self->option_count; i++)
+		fprintf(stderr, "%s:%s,", self->keys[i], self->values[i]);
+
+	fprintf(stderr, "\n");
+}
+
 void parse_arguments(int argc, const char **argv, struct application *app) {
+	struct cmd_arguments arguments;
+
 	if (argc < 3)
-		exit_info(1, "Usage sample: sp-pipe /dev/ttyUSB0 115200 ['start string'] ['end string']\n");
+		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 --baudrate 9600 --start_string 'x' --end_string 'y'\n");
 
-	app->serialport_device = argv[1];
-	app->baudrate = atoi(argv[2]);
-	app->start_string = NULL;
-	app->end_string = NULL;
+	cmd_arguments_prepare(&arguments, argc, argv);
+	// cmd_arguments_describe(&arguments);
 
-	if (argc >= 4)
-		app->start_string = argv[3];
-	if (argc >= 5)
-		app->end_string = argv[4];
+	app->serialport_device = cmd_arguments_get(&arguments, "port", NULL);
+	app->baudrate = atoi(cmd_arguments_get(&arguments, "baudrate", "115200"));
+	app->start_string = cmd_arguments_get(&arguments, "start_string", NULL);
+	app->end_string = cmd_arguments_get(&arguments, "end_string", NULL);
+	app->output_file = cmd_arguments_get(&arguments, "output_file", NULL);
+
+	cmd_arguments_cleanup(&arguments);
+
+	if (app->serialport_device == NULL)
+		exit_info(2, "Serial port is not specified\n");
 }
 
 // clang-format off
@@ -120,7 +226,7 @@ int s_fsm_wait_for_start(struct serialport_fsm *self) {
 		self->cursor = self->buffer_end;
 		return 1;
 	}
-	fwrite(s + r.start, 1, r.end - r.start, stdout);
+	fwrite(s + r.start, 1, r.end - r.start, app.output_file_handle);
 	self->cursor += r.end;
 	if (self->end_string != NULL) {
 		self->state = FSM_NORMAL1;
@@ -146,7 +252,7 @@ int s_fsm_normal1(struct serialport_fsm *self) {
 	} else {
 		self->cursor = self->buffer_end;
 	}
-	fwrite(s, 1, size, stdout);
+	fwrite(s, 1, size, app.output_file_handle);
 
 	return 1;
 }
@@ -158,7 +264,7 @@ int s_fsm_normal2(struct serialport_fsm *self) {
 	s = self->buffer + self->cursor;
 	size = self->buffer_end - self->cursor;
 	self->cursor = self->buffer_end;
-	fwrite(s, 1, size, stdout);
+	fwrite(s, 1, size, app.output_file_handle);
 
 	return 1;
 }
@@ -236,8 +342,9 @@ int main(int argc, const char **argv) {
 	int r;
 
 	parse_arguments(argc, argv, &app);
-	app_initialize(&app);
 	// app_describe(&app);
+
+	app_initialize(&app);
 
 	r = pthread_create(&serialport_thread, NULL, (pthread_start_routine)serialport_data_handler, NULL);
 	if (r)
