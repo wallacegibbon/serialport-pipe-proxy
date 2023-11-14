@@ -166,7 +166,7 @@ void parse_arguments(int argc, const char **argv, struct application *app) {
 	struct cmd_arguments arguments;
 
 	if (argc < 3)
-		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 --baudrate 9600 --start_string 'x' --end_string 'y'\n");
+		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 --baudrate 9600 --start_string 'x' --end_string 'y' --pipe_stdin\n");
 
 	cmd_arguments_prepare(&arguments, argc, argv);
 	// cmd_arguments_describe(&arguments);
