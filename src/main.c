@@ -19,6 +19,7 @@ struct application {
 	const char *start_string;
 	const char *end_string;
 	const char *output_file;
+	int pipe_stdin;
 
 	/// running states
 	struct sp_port *serialport;
@@ -175,6 +176,7 @@ void parse_arguments(int argc, const char **argv, struct application *app) {
 	app->start_string = cmd_arguments_get(&arguments, "start_string", NULL);
 	app->end_string = cmd_arguments_get(&arguments, "end_string", NULL);
 	app->output_file = cmd_arguments_get(&arguments, "output_file", NULL);
+	app->pipe_stdin = cmd_arguments_has(&arguments, "pipe_stdin");
 
 	cmd_arguments_cleanup(&arguments);
 
@@ -242,16 +244,15 @@ int s_fsm_normal1(struct serialport_fsm *self) {
 	s = self->buffer + self->cursor;
 	size = self->buffer_end - self->cursor;
 	r = sd_feed(&self->detector, s, self->buffer_end);
-	if (r.start > 0) {
+	if (r.start < 0) {
+		self->cursor = self->buffer_end;
+	} else {
 		self->cursor += r.end;
 		size = r.end;
 		self->state = FSM_END;
-	} else {
-		self->cursor = self->buffer_end;
 	}
 	fwrite(s, 1, size, app.output_file_handle);
 	fflush(app.output_file_handle);
-
 	return 1;
 }
 
@@ -317,6 +318,9 @@ void *stdin_data_handler(void *data) {
 	unsigned char buffer[STDIN_READ_BUFFER_SIZE + 1];
 	int has_more;
 	int r;
+
+	if (!app.pipe_stdin)
+		return NULL;
 
 	has_more = 1;
 	while (has_more && app_running_flag_get(&app)) {
