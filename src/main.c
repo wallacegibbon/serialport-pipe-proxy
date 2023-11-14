@@ -58,10 +58,6 @@ void app_cleanup(struct application *self) {
 	if (r < 0)
 		exit_info(r, "failed closing port %s\n", self->serialport_device);
 
-	r = fflush(self->output_file_handle);
-	if (r)
-		exit_info(11, "failed closing output file %s\n", self->output_file);
-
 	r = fclose(self->output_file_handle);
 	if (r)
 		exit_info(12, "failed closing output file %s\n", self->output_file);
@@ -227,6 +223,7 @@ int s_fsm_wait_for_start(struct serialport_fsm *self) {
 		return 1;
 	}
 	fwrite(s + r.start, 1, r.end - r.start, app.output_file_handle);
+	fflush(app.output_file_handle);
 	self->cursor += r.end;
 	if (self->end_string != NULL) {
 		self->state = FSM_NORMAL1;
@@ -253,6 +250,7 @@ int s_fsm_normal1(struct serialport_fsm *self) {
 		self->cursor = self->buffer_end;
 	}
 	fwrite(s, 1, size, app.output_file_handle);
+	fflush(app.output_file_handle);
 
 	return 1;
 }
@@ -265,6 +263,7 @@ int s_fsm_normal2(struct serialport_fsm *self) {
 	size = self->buffer_end - self->cursor;
 	self->cursor = self->buffer_end;
 	fwrite(s, 1, size, app.output_file_handle);
+	fflush(app.output_file_handle);
 
 	return 1;
 }
