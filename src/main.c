@@ -90,7 +90,7 @@ void parse_arguments(int argc, const char **argv, struct application *app) {
 	if (argc < 3)
 		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 --baudrate 9600 --start_string 'x' --end_string 'y' --pipe_stdin\n");
 
-	cmd_argument_parser_prepare(&parser, argc, argv);
+	cmd_argument_parser_prepare(&parser, argc - 1, argv + 1);
 	// cmd_argument_parser_describe(&parser);
 
 	app->serialport_device = cmd_argument_parser_get(&parser, "port", NULL);
