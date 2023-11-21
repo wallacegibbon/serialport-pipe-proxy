@@ -5,7 +5,7 @@ C_INCLUDES += ./lib ./src
 
 TARGET = sp-pipe
 
-LD_FLAGS += -lserialport -lpthread
+LD_FLAGS += -lserialport -lpthread -lcmd_argument_parser
 
 ifeq ($(shell uname), Linux)
 LD_FLAGS += -static

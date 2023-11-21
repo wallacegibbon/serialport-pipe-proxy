@@ -1,4 +1,4 @@
-#include "cmd_arguments.h"
+#include "cmd_argument_parser.h"
 #include "range.h"
 #include "serialport.h"
 #include "str_detector.h"
@@ -85,22 +85,22 @@ int app_running_flag_get(struct application *self) {
 }
 
 void parse_arguments(int argc, const char **argv, struct application *app) {
-	struct cmd_arguments arguments;
+	struct cmd_argument_parser parser;
 
 	if (argc < 3)
 		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 --baudrate 9600 --start_string 'x' --end_string 'y' --pipe_stdin\n");
 
-	cmd_arguments_prepare(&arguments, argc, argv);
-	// cmd_arguments_describe(&arguments);
+	cmd_argument_parser_prepare(&parser, argc, argv);
+	// cmd_argument_parser_describe(&parser);
 
-	app->serialport_device = cmd_arguments_get(&arguments, "port", NULL);
-	app->baudrate = atoi(cmd_arguments_get(&arguments, "baudrate", "115200"));
-	app->start_string = cmd_arguments_get(&arguments, "start_string", NULL);
-	app->end_string = cmd_arguments_get(&arguments, "end_string", NULL);
-	app->output_file = cmd_arguments_get(&arguments, "output_file", NULL);
-	app->pipe_stdin = cmd_arguments_has(&arguments, "pipe_stdin");
+	app->serialport_device = cmd_argument_parser_get(&parser, "port", NULL);
+	app->baudrate = atoi(cmd_argument_parser_get(&parser, "baudrate", "115200"));
+	app->start_string = cmd_argument_parser_get(&parser, "start_string", NULL);
+	app->end_string = cmd_argument_parser_get(&parser, "end_string", NULL);
+	app->output_file = cmd_argument_parser_get(&parser, "output_file", NULL);
+	app->pipe_stdin = cmd_argument_parser_has(&parser, "pipe_stdin");
 
-	cmd_arguments_cleanup(&arguments);
+	cmd_argument_parser_cleanup(&parser);
 
 	if (app->serialport_device == NULL)
 		exit_info(2, "Serial port is not specified\n");
