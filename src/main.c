@@ -266,8 +266,6 @@ static void *stdin_data_handler(void *data) {
 	app_running_flag_set(&app, 0);
 }
 
-typedef void *(*pthread_start_routine)(void *);
-
 int main(int argc, const char **argv) {
 	pthread_t stdin_thread, serialport_thread;
 	void *thread_ret;
@@ -278,7 +276,7 @@ int main(int argc, const char **argv) {
 
 	app_initialize(&app);
 
-	r = pthread_create(&serialport_thread, NULL, (pthread_start_routine)serialport_data_handler, NULL);
+	r = pthread_create(&serialport_thread, NULL, serialport_data_handler, NULL);
 	if (r)
 		exit_info(2, "failed creating serialport thread\n");
 
