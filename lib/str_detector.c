@@ -12,11 +12,7 @@ struct range sd_feed(struct str_detector *self, const char *buffer, int size) {
 	struct range r;
 	int i, j;
 
-	range_set(&r, -1, -1);
-
-	i = 0;
-	j = 0;
-	while (i < size && self->cursor < self->target_size) {
+	for (i = 0, j = 0; i < size && self->cursor < self->target_size;) {
 		if (self->target[self->cursor] == buffer[i]) {
 			self->cursor++;
 			i++;
@@ -28,6 +24,8 @@ struct range sd_feed(struct str_detector *self, const char *buffer, int size) {
 
 	if (self->cursor == self->target_size)
 		range_set(&r, j, i);
+	else
+		range_set(&r, -1, -1);
 
 	return r;
 }

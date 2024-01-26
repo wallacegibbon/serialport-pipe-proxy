@@ -2,6 +2,7 @@
 #include "range.h"
 #include "serialport.h"
 #include "str_detector.h"
+#include "string_fixer.h"
 #include "util.h"
 #include <errno.h>
 #include <libserialport.h>
@@ -31,6 +32,19 @@ struct application {
 
 struct application app;
 
+/// Methods for struct application can call exit_info directly.
+
+const char *adjust_escaped_string(const char *s) {
+	struct string_fixer fixer;
+	int i;
+
+	sf_initialize(&fixer, s);
+	if (sf_convert(&fixer) == 0)
+		return (const char *)fixer.output;
+	else
+		return NULL;
+}
+
 void app_initialize(struct application *self) {
 	int r;
 
@@ -51,6 +65,11 @@ void app_initialize(struct application *self) {
 
 	if (self->output_file_handle == NULL)
 		exit_info(3, "failed opening output file: %d\n", self->output_file);
+
+	if (self->start_string)
+		self->start_string = adjust_escaped_string(self->start_string);
+	if (self->end_string)
+		self->end_string = adjust_escaped_string(self->end_string);
 }
 
 void app_cleanup(struct application *self) {
@@ -63,6 +82,10 @@ void app_cleanup(struct application *self) {
 	r = fclose(self->output_file_handle);
 	if (r)
 		exit_info(12, "failed closing output file %s\n", self->output_file);
+
+	/// start_string and end_string are replaced by `malloc`ed blocks by `string_fixer`
+	free((char *)self->start_string);
+	free((char *)self->end_string);
 }
 
 void app_describe(struct application *self) {
@@ -107,7 +130,7 @@ void parse_arguments(int argc, const char **argv, struct application *app) {
 }
 
 // clang-format off
-enum serialport_fsm_state {FSM_WAITING_FOR_START, FSM_NORMAL1, FSM_NORMAL2, FSM_END};
+enum serialport_fsm_state {FSM_WAITING_FOR_START, FSM_NORMAL1, FSM_NORMAL2, FSM_END, FSM_READ_ERROR};
 // clang-format on
 
 struct serialport_fsm {
@@ -191,16 +214,21 @@ int s_fsm_normal2(struct serialport_fsm *self) {
 	return 1;
 }
 
+static inline int s_fsm_buffer_empty(struct serialport_fsm *self) {
+	return self->cursor == self->buffer_end;
+}
+
 /// This function may call sp_blocking_read, so it can block.
 void s_fsm_fill_more(struct serialport_fsm *self) {
-	if (self->buffer_end == 0 || self->cursor == self->buffer_end) {
-		self->cursor = 0;
-		self->buffer_end = sp_blocking_read(app.serialport, self->buffer, SERIALPORT_READ_BUFFER_SIZE, 100);
-		if (self->buffer_end < 0)
-			exit_info(11, "failed reading from serial port\n");
+	if (self->buffer_end > 0 && !s_fsm_buffer_empty(self))
+		return;
 
+	self->cursor = 0;
+	self->buffer_end = sp_blocking_read(app.serialport, self->buffer, SERIALPORT_READ_BUFFER_SIZE, 100);
+	if (self->buffer_end < 0)
+		self->state = FSM_READ_ERROR;
+	else
 		self->buffer[self->buffer_end] = '\0';
-	}
 }
 
 int s_fsm_step(struct serialport_fsm *self) {
@@ -217,11 +245,10 @@ int s_fsm_step(struct serialport_fsm *self) {
 		return s_fsm_normal1(self);
 	case FSM_NORMAL2:
 		return s_fsm_normal2(self);
+	case FSM_READ_ERROR:
+	default:
+		return 0;
 	}
-}
-
-static inline int s_fsm_buffer_empty(struct serialport_fsm *self) {
-	return self->cursor == self->buffer_end;
 }
 
 static void *serialport_data_handler(void *data) {
@@ -232,6 +259,9 @@ static void *serialport_data_handler(void *data) {
 	/// `app_running_flag_get` have to be called after `s_fsm_step`.
 	while (s_fsm_step(&s_fsm) && (!s_fsm_buffer_empty(&s_fsm) || app_running_flag_get(&app)))
 		;
+
+	if (s_fsm.state == FSM_READ_ERROR)
+		exit_info(11, "failed reading from serial port\n");
 
 	app_running_flag_set(&app, 0);
 	return (void *)0;
@@ -272,9 +302,9 @@ int main(int argc, const char **argv) {
 	int r;
 
 	parse_arguments(argc, argv, &app);
-	// app_describe(&app);
 
 	app_initialize(&app);
+	// app_describe(&app);
 
 	r = pthread_create(&serialport_thread, NULL, serialport_data_handler, NULL);
 	if (r)
