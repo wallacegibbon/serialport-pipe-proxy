@@ -2,13 +2,15 @@
 #include "str_detector.h"
 #include <string.h>
 
-void sd_initialize(struct str_detector *self, const char *target) {
+void sd_init(struct str_detector *self, const char *target)
+{
 	self->target = target;
 	self->target_size = strlen(target);
 	self->cursor = 0;
 }
 
-struct range sd_feed(struct str_detector *self, const char *buffer, int size) {
+struct range sd_feed(struct str_detector *self, const char *buffer, int size)
+{
 	struct range r;
 	int i, j;
 

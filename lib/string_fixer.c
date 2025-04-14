@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-int sf_initialize(struct string_fixer *self, const char *input) {
+int sf_init(struct string_fixer *self, const char *input)
+{
 	self->input = input;
 	self->output = calloc(1, strlen(input) + 1);
 	if (self->output == NULL)
@@ -14,12 +15,18 @@ int sf_initialize(struct string_fixer *self, const char *input) {
 	return 0;
 }
 
-/// This function may not be called since the output is usually managed by other data.
-int sf_cleanup(struct string_fixer *self) {
+/*
+ * This function may not be called since the output is usually managed
+ * by other data.
+ */
+int sf_deinit(struct string_fixer *self)
+{
 	free(self->output);
+	return 0;
 }
 
-int sf_step(struct string_fixer *self, int *error) {
+int sf_step(struct string_fixer *self, int *error)
+{
 	char tmpbuf[3];
 	char ch;
 
@@ -55,12 +62,12 @@ int sf_step(struct string_fixer *self, int *error) {
 	return 1;
 }
 
-int sf_convert(struct string_fixer *self) {
+int sf_convert(struct string_fixer *self)
+{
 	int error;
-	while (sf_step(self, &error))
-		;
+	while (sf_step(self, &error)) ;
 
-	/// not necessary since self->output is allocated by `calloc`.
+	/* not necessary since self->output is allocated by `calloc`. */
 	*self->output_cursor = '\0';
 
 	return error;

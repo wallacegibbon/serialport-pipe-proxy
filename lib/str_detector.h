@@ -7,7 +7,7 @@ struct str_detector {
 	int cursor;
 };
 
-void sd_initialize(struct str_detector *self, const char *target);
+void sd_init(struct str_detector *self, const char *target);
 struct range sd_feed(struct str_detector *self, const char *buffer, int size);
 
 #endif

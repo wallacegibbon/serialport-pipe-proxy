@@ -8,7 +8,8 @@
 #include "unistd.h"
 #endif
 
-void sleep_milliseconds(int milliseconds) {
+void sleep_ms(int milliseconds)
+{
 #if defined(_WIN32) || defined(_WIN64)
 	Sleep(milliseconds);
 #else
@@ -16,7 +17,8 @@ void sleep_milliseconds(int milliseconds) {
 #endif
 }
 
-void exit_info(int code, const char *format, ...) {
+void exit_info(int code, const char *format, ...)
+{
 	va_list args;
 
 	va_start(args, format);

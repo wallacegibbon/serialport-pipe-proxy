@@ -6,7 +6,8 @@ struct range {
 	int end;
 };
 
-static inline void range_set(struct range *self, int start, int end) {
+static inline void range_set(struct range *self, int start, int end)
+{
 	self->start = start;
 	self->end = end;
 }

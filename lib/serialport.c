@@ -1,7 +1,8 @@
 #include "serialport.h"
 #include "util.h"
 
-int serialport_open(struct sp_port **port, const char *portname, int baudrate) {
+int serialport_open(struct sp_port **port, const char *portname, int baudrate)
+{
 	int ret;
 
 	ret = sp_get_port_by_name(portname, port);
