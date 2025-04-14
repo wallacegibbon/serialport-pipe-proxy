@@ -1,5 +1,4 @@
 C_SOURCE_FILES += $(wildcard ./lib/*.c)
-C_SOURCE_FILES += ./src/main.c
 
 C_INCLUDES += ./lib ./src
 
@@ -21,7 +20,7 @@ include cc-with-test.mk
 
 exec: $(BUILD_DIR)/$(TARGET)
 
-$(BUILD_DIR)/$(TARGET): $(OBJECTS) | build_dir
+$(BUILD_DIR)/$(TARGET): $(OBJECTS) ./src/main.c | build_dir
 	@echo "CC $<"
 	@$(CC) -o $@ $^ $(C_FLAGS) $(LD_FLAGS)
 

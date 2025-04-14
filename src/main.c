@@ -2,7 +2,7 @@
 #include "range.h"
 #include "serialport.h"
 #include "str_detector.h"
-#include "string_fixer.h"
+#include "str_fixer.h"
 #include "util.h"
 #include <errno.h>
 #include <libserialport.h>
@@ -36,7 +36,7 @@ struct application app;
 
 const char *adjust_escaped_string(const char *s)
 {
-	struct string_fixer fixer;
+	struct str_fixer fixer;
 	int i;
 
 	sf_init(&fixer, s);
@@ -96,20 +96,20 @@ void app_deinit(struct application *self)
 				self->output_file);
 
 	/*
-	 * start_string and end_string are replaced by `malloc`ed blocks
-	 * by `string_fixer`
+	 * start_string and end_string points to memories `malloc`ed
+	 * by `str_fixer`.
 	 */
+
 	free((void *)self->start_string);
 	free((void *)self->end_string);
 }
 
 void app_describe(struct application *self)
 {
-	fprintf(stderr,
-		"application params\n\tport:%s, baudrate:%d, "
-		"startstring:%s, endstring:%s\n",
-		self->serialport_device, self->baudrate,
-		self->start_string, self->end_string);
+	fprintf(stderr, "application params\n\tport:%s, baudrate:%d, "
+			"startstring:%s, endstring:%s\n",
+			self->serialport_device, self->baudrate,
+			self->start_string, self->end_string);
 }
 
 void app_running_flag_set(struct application *self, int new_value)
@@ -134,8 +134,9 @@ void parse_arguments(int argc, const char **argv, struct application *app)
 
 	if (argc < 3)
 		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 "
-			"--baudrate 9600 --start_string 'x' --end_string 'y' "
-			"--pipe_stdin\n");
+				"--baudrate 115200 "
+				"--start_string 'xxx' --end_string 'yyy' "
+				"--pipe_stdin\n");
 
 	cmd_argument_parser_init(&parser, argc - 1, argv + 1);
 	/*
