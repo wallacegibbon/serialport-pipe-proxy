@@ -20,7 +20,8 @@ struct application {
 	const char *start_string;
 	const char *end_string;
 	const char *output_file;
-	int pipe_stdin;
+	char pipe_stdin;
+	char debug;
 
 	/* running states */
 	struct sp_port *serialport;
@@ -106,9 +107,11 @@ void app_deinit(struct application *self)
 void app_describe(struct application *self)
 {
 	fprintf(stderr, "application params\n\tport:%s, baudrate:%d, "
-			"startstring:%s, endstring:%s\n",
+			"start_string:%s, end_string:%s, "
+			"pipe_stdin: %d, debug: %d\n",
 			self->serialport_device, self->baudrate,
-			self->start_string, self->end_string);
+			self->start_string, self->end_string,
+			self->pipe_stdin, self->debug);
 }
 
 void app_running_flag_set(struct application *self, int new_value)
@@ -131,11 +134,13 @@ void parse_arguments(int argc, const char **argv, struct application *app)
 {
 	struct cmd_argument_parser parser;
 
-	if (argc < 3)
-		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 "
-				"--baudrate 115200 "
-				"--start-string 'xxx' --end-string 'yyy' "
-				"--pipe-stdin\n");
+	if (argc == 1)
+		exit_info(1, "Usage: sp-pipe\t--port\t\t/dev/ttyUSB0\n"
+				"\t\t--baudrate\t115200\n"
+				"\t\t--start-string\t'a\\x62c'\n"
+				"\t\t--end-string\t'd\\x65f'\n"
+				"\t\t--pipe-stdin\n"
+				"\t\t--debug\n");
 
 	cmd_argument_parser_init(&parser, argc - 1, argv + 1);
 	/*
@@ -157,7 +162,12 @@ void parse_arguments(int argc, const char **argv, struct application *app)
 	app->output_file = cmd_argument_parser_get(&parser, "output-file",
 			NULL);
 
+	/*
+	cmd_argument_parser_describe(&parser);
+	*/
+
 	app->pipe_stdin = cmd_argument_parser_has(&parser, "pipe-stdin");
+	app->debug = cmd_argument_parser_has(&parser, "debug");
 
 	cmd_argument_parser_deinit(&parser);
 
@@ -210,7 +220,7 @@ int s_fsm_wait_for_start(struct serialport_fsm *self)
 	size = self->data_end - self->cursor;
 	if (sm_feed(&self->matcher, s, size, &start, &end)) {
 		self->cursor = self->data_end;
-		return 1;
+		return 0;
 	}
 
 	self->cursor += end;
@@ -311,8 +321,10 @@ int s_fsm_step(struct serialport_fsm *self)
 	case FSM_NORMAL2:
 		return s_fsm_normal2(self);
 	case FSM_READ_ERROR:
-	default:
+		fprintf(stderr, "serial port read error\n");
 		return 2;
+	default:
+		return 3;
 	}
 }
 
@@ -328,11 +340,14 @@ static void *serialport_data_handler(void *data)
 			app_running_flag_get(&app)))
 		;
 
+	if (app.debug)
+		fprintf(stderr, "serial port data read thread finished\n");
+
 	if (s_fsm.state == FSM_READ_ERROR)
 		exit_info(11, "failed reading from serial port\n");
 
 	app_running_flag_set(&app, 0);
-	return (void *)0;
+	return NULL;
 }
 
 static void *stdin_data_handler(void *data)
@@ -366,6 +381,9 @@ static void *stdin_data_handler(void *data)
 			exit_info(2, "write error\n");
 	}
 
+	if (app.debug)
+		fprintf(stderr, "stdin data handler thread finished\n");
+
 	app_running_flag_set(&app, 0);
 	return NULL;
 }
@@ -379,9 +397,8 @@ int main(int argc, const char **argv)
 	parse_arguments(argc, argv, &app);
 
 	app_init(&app);
-	/*
-	app_describe(&app);
-	*/
+	if (app.debug)
+		app_describe(&app);
 
 	r = pthread_create(&serialport_thread, NULL, serialport_data_handler,
 			NULL);
