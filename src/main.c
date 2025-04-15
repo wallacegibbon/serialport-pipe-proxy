@@ -1,43 +1,36 @@
 #include "cmd_argument_parser.h"
-#include "serialport.h"
 #include "str_matcher.h"
 #include "str_fixer.h"
 #include "util.h"
-#include <errno.h>
 #include <libserialport.h>
 #include <pthread.h>
-#include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
 #include <stdarg.h>
+#include <errno.h>
 
-#define SERIALPORT_READ_BUFFER_SIZE 4096
-#define STDIN_READ_BUFFER_SIZE 4096
+#define SERIALPORT_BUF_SIZE 4096
+#define STDIN_BUF_SIZE 4096
 
-struct application {
-	/* const parameters */
+/* Parameters */
 
-	const char *serialport_device;		/* device file name of port */
-	long baudrate;				/* baudrate of the port */
-	const char *start_string;		/* the start sign of data */
-	const char *end_string;			/* the end sign of data */
-	const char *output_file;		/* file to write to */
-	long long timeout;			/* timeout in milliseconds */
-	long long timecount;			/* to match with `timeout` */
-	char pipe_stdin;			/* stdin -> serial port */
-	char debug;				/* control debug printing */
+const char *serialport_device;		/* Device file name of port */
+long baudrate;				/* Baudrate of the port */
+const char *start_string;		/* The start sign of data */
+const char *end_string;			/* The end sign of data */
+const char *output_file;		/* File to write to */
+long long timeout = -1;			/* Timeout in milliseconds */
+long long timecount;			/* To match with `timeout` */
+char pipe_stdin;			/* STDIN -> Serial Port */
+char debug;				/* Control debug printing */
 
-	/* running states */
+/* States */
 
-	struct sp_port *serialport;		/* libserialport from sigrok */
-	int running_flag;			/* thread control */
-	pthread_mutex_t running_flag_lock;	/* work with `running_flag` */
-	FILE *output_file_handle;		/* output fd */
-};
-
-struct application app;
-
-/* Methods for struct application can call exit_info directly. */
+struct sp_port *serialport;		/* Main object of `libserialport` */
+int running_flag = 1;			/* Thread control */
+pthread_mutex_t running_flag_lock;	/* Work with `running_flag` */
+FILE *output_file_handle;		/* Can be STDOUT */
 
 const char *adjust_escaped_string(const char *s)
 {
@@ -51,83 +44,116 @@ const char *adjust_escaped_string(const char *s)
 		return NULL;
 }
 
-void app_init(struct application *self)
+void app_usage_and_exit()
 {
-	int r;
+	exit_info(1, "Usage: sp-pipe\t--port\t\t/dev/ttyUSB0\n"
+			"\t\t--baudrate\t115200\n"
+			"\t\t--start-string\t'a\\x62c'\n"
+			"\t\t--end-string\t'd\\x65f'\n"
+			"\t\t--timeout\t10000\n"
+			"\t\t--pipe-stdin\n"
+			"\t\t--debug\n");
+}
 
-	pthread_mutex_init(&self->running_flag_lock, NULL);
-	self->running_flag = 1;
+void app_get_arguments(int argc, const char **argv)
+{
+	struct cmd_argument_parser parser;
+
+	cmd_argument_parser_init(&parser, argc - 1, argv + 1);
+	/*
+	cmd_argument_parser_describe(&parser);
+	*/
+
+	serialport_device = cmd_argument_parser_get(&parser, "port", NULL);
+	baudrate = atoi(cmd_argument_parser_get(&parser, "baudrate", "115200"));
+	start_string = cmd_argument_parser_get(&parser, "start-string", NULL);
+	end_string = cmd_argument_parser_get(&parser, "end-string", NULL);
+	output_file = cmd_argument_parser_get(&parser, "output-file", NULL);
+	timeout = atoi(cmd_argument_parser_get(&parser, "timeout", "-1"));
+	pipe_stdin = cmd_argument_parser_has(&parser, "pipe-stdin");
+	debug = cmd_argument_parser_has(&parser, "debug");
+
+	cmd_argument_parser_deinit(&parser);
+
+	if (serialport_device == NULL)
+		exit_info(2, "Serial port is not specified\n");
+}
+
+void serialport_open()
+{
+	if (sp_get_port_by_name(serialport_device, &serialport) < 0)
+		exit_info(-1, "failed getting port by name \"%s\"\n",
+				serialport_device);
+	if (sp_open(serialport, SP_MODE_READ_WRITE) < 0)
+		exit_info(-2, "failed opening port \"%s\"\n",
+				serialport_device);
+
+	sp_set_baudrate(serialport, baudrate);
+	sp_set_bits(serialport, 8);
+	sp_set_parity(serialport, SP_PARITY_NONE);
+	sp_set_stopbits(serialport, 1);
+	sp_set_flowcontrol(serialport, SP_FLOWCONTROL_NONE);
+}
+
+void app_init()
+{
+	pthread_mutex_init(&running_flag_lock, NULL);
 
 	/*
 	 * Open the serial port before starting serial port reading thread
 	 * to avoid some error.
 	 */
-	r = serialport_open(&self->serialport, self->serialport_device,
-				self->baudrate);
-	if (r == -1)
-		exit_info(r, "failed getting port by name \"%s\"\n",
-				self->serialport_device);
-	if (r == -2)
-		exit_info(r, "failed opening port \"%s\"\n",
-				self->serialport_device);
+	serialport_open();
 
-	if (self->output_file == NULL)
-		self->output_file_handle = stdout;
+	if (output_file == NULL)
+		output_file_handle = stdout;
 	else
-		self->output_file_handle = fopen(self->output_file, "w");
+		output_file_handle = fopen(output_file, "w");
 
-	if (self->output_file_handle == NULL)
+	if (output_file_handle == NULL)
 		exit_info(3, "failed opening output file: %d\n",
-				self->output_file);
+				output_file);
 
-	if (self->start_string)
-		self->start_string = adjust_escaped_string(self->start_string);
-	if (self->end_string)
-		self->end_string = adjust_escaped_string(self->end_string);
-
-	self->timecount = 0;
+	if (start_string)
+		start_string = adjust_escaped_string(start_string);
+	if (end_string)
+		end_string = adjust_escaped_string(end_string);
 }
 
-void app_deinit(struct application *self)
+void app_deinit()
 {
-	int r;
-	pthread_mutex_destroy(&self->running_flag_lock);
-	r = sp_close(self->serialport);
-	if (r < 0)
-		exit_info(r, "failed closing port %s\n",
-				self->serialport_device);
+	pthread_mutex_destroy(&running_flag_lock);
 
-	r = fclose(self->output_file_handle);
-	if (r)
-		exit_info(12, "failed closing output file %s\n",
-				self->output_file);
+	if (sp_close(serialport) < 0)
+		exit_info(-2, "failed closing port %s\n", serialport_device);
+	if (fclose(output_file_handle))
+		exit_info(-2, "failed closing output file %s\n", output_file);
 
 	/*
 	 * start_string and end_string points to memories `malloc`ed
 	 * by `str_fixer`.
 	 */
 
-	free((void *)self->start_string);
-	free((void *)self->end_string);
+	free((void *)start_string);
+	free((void *)end_string);
 }
 
-void app_describe(struct application *self)
+void app_describe()
 {
 	fprintf(stderr, "application params\n\tport:%s, baudrate:%ld, "
 			"start_string:%s, end_string:%s, "
 			"timeout: %lld, timecount: %lld, "
 			"pipe_stdin: %d, debug: %d\n",
-			self->serialport_device, self->baudrate,
-			self->start_string, self->end_string,
-			self->timeout, self->timecount,
-			self->pipe_stdin, self->debug);
+			serialport_device, baudrate,
+			start_string, end_string,
+			timeout, timecount, pipe_stdin, debug);
 }
 
-void app_debug(struct application *self, const char *fmt, ...)
+void app_debug(const char *fmt, ...)
 {
 	va_list args;
 
-	if (!app.debug)
+	if (!debug)
 		return;
 
 	va_start(args, fmt);
@@ -136,66 +162,21 @@ void app_debug(struct application *self, const char *fmt, ...)
 	va_end(args);
 }
 
-void app_running_flag_set(struct application *self, int new_value)
+void app_running_flag_set(int new_value)
 {
-	pthread_mutex_lock(&self->running_flag_lock);
-	app_debug(self, "setting running flag to %d\n", new_value);
-	self->running_flag = new_value;
-	pthread_mutex_unlock(&self->running_flag_lock);
+	pthread_mutex_lock(&running_flag_lock);
+	app_debug("setting running flag to %d\n", new_value);
+	running_flag = new_value;
+	pthread_mutex_unlock(&running_flag_lock);
 }
 
-int app_running_flag_get(struct application *self)
+int app_running_flag_get()
 {
 	int is_active;
-	pthread_mutex_lock(&self->running_flag_lock);
-	is_active = self->running_flag;
-	pthread_mutex_unlock(&self->running_flag_lock);
+	pthread_mutex_lock(&running_flag_lock);
+	is_active = running_flag;
+	pthread_mutex_unlock(&running_flag_lock);
 	return is_active;
-}
-
-void parse_arguments(int argc, const char **argv, struct application *app)
-{
-	struct cmd_argument_parser parser;
-
-	if (argc == 1)
-		exit_info(1, "Usage: sp-pipe\t--port\t\t/dev/ttyUSB0\n"
-				"\t\t--baudrate\t115200\n"
-				"\t\t--start-string\t'a\\x62c'\n"
-				"\t\t--end-string\t'd\\x65f'\n"
-				"\t\t--timeout\t10000\n"
-				"\t\t--pipe-stdin\n"
-				"\t\t--debug\n");
-
-	cmd_argument_parser_init(&parser, argc - 1, argv + 1);
-	/*
-	cmd_argument_parser_describe(&parser);
-	*/
-
-	app->serialport_device = cmd_argument_parser_get(&parser, "port",
-			NULL);
-
-	app->baudrate = atoi(cmd_argument_parser_get(&parser, "baudrate",
-			"115200"));
-
-	app->start_string = cmd_argument_parser_get(&parser, "start-string",
-			NULL);
-
-	app->end_string = cmd_argument_parser_get(&parser, "end-string",
-			NULL);
-
-	app->output_file = cmd_argument_parser_get(&parser, "output-file",
-			NULL);
-
-	app->timeout = atoi(cmd_argument_parser_get(&parser, "timeout",
-			"-1"));
-
-	app->pipe_stdin = cmd_argument_parser_has(&parser, "pipe-stdin");
-	app->debug = cmd_argument_parser_has(&parser, "debug");
-
-	cmd_argument_parser_deinit(&parser);
-
-	if (app->serialport_device == NULL)
-		exit_info(2, "Serial port is not specified\n");
 }
 
 enum serialport_fsm_state {
@@ -206,107 +187,100 @@ enum serialport_fsm_state {
 	FSM_READ_ERROR
 };
 
-struct serialport_fsm {
-	char buffer[SERIALPORT_READ_BUFFER_SIZE + 1];
-	int cursor;
-	int data_end;
-	enum serialport_fsm_state state;
-	struct str_matcher matcher;
-	const char *start_string;
-	const char *end_string;
-};
+/* FSM for data analyzing.  (start_string, end_string related) */
 
-void s_fsm_init(struct serialport_fsm *self,
-		const char *start_string, const char *end_string)
+char s_buf[SERIALPORT_BUF_SIZE + 1];	/* Buffer for serial port data */
+int s_buf_cursor;			/* Index, work with s_buf */
+int s_buf_end;				/* The index to the end of data */
+enum serialport_fsm_state fsm;		/* The FSM */
+struct str_matcher matcher;		/* Matcher holds some inner data */
+
+void s_fsm_init(const char *start_string, const char *end_string)
 {
 	if (start_string != NULL) {
-		self->state = FSM_WAITING_FOR_START;
-		sm_init(&self->matcher, start_string);
+		fsm = FSM_WAITING_FOR_START;
+		sm_init(&matcher, start_string);
 	} else if (end_string != NULL) {
-		self->state = FSM_NORMAL1;
-		sm_init(&self->matcher, end_string);
+		fsm = FSM_NORMAL1;
+		sm_init(&matcher, end_string);
 	} else {
-		self->state = FSM_NORMAL2;
+		fsm = FSM_NORMAL2;
 	}
-	self->cursor = 0;
-	self->data_end = 0;
-	self->start_string = start_string;
-	self->end_string = end_string;
 }
 
-int s_fsm_wait_for_start(struct serialport_fsm *self)
+int s_fsm_wait_for_start()
 {
 	int start = 0, end = 0, size;
 	char *s;
 
-	s = self->buffer + self->cursor;
-	size = self->data_end - self->cursor;
-	if (sm_feed(&self->matcher, s, size, &start, &end)) {
-		self->cursor = self->data_end;
+	s = s_buf + s_buf_cursor;
+	size = s_buf_end - s_buf_cursor;
+	if (sm_feed(&matcher, s, size, &start, &end)) {
+		s_buf_cursor = s_buf_end;
 		return 0;
 	}
 
-	self->cursor += end;
+	s_buf_cursor += end;
 
-	fwrite(s + start, 1, end - start, app.output_file_handle);
-	fflush(app.output_file_handle);
+	fwrite(s + start, 1, end - start, output_file_handle);
+	fflush(output_file_handle);
 
-	if (self->end_string != NULL) {
-		self->state = FSM_NORMAL1;
-		sm_init(&self->matcher, self->end_string);
+	if (end_string != NULL) {
+		fsm = FSM_NORMAL1;
+		sm_init(&matcher, end_string);
 	} else {
-		self->state = FSM_NORMAL2;
+		fsm = FSM_NORMAL2;
 	}
 	return 0;
 }
 
-int s_fsm_normal1(struct serialport_fsm *self)
+int s_fsm_normal1()
 {
 	int start = 0, end = 0, size;
 	char *s;
 
-	s = self->buffer + self->cursor;
-	size = self->data_end - self->cursor;
+	s = s_buf + s_buf_cursor;
+	size = s_buf_end - s_buf_cursor;
 
-	if (sm_feed(&self->matcher, s, size, &start, &end)) {
-		self->cursor = self->data_end;
+	if (sm_feed(&matcher, s, size, &start, &end)) {
+		s_buf_cursor = s_buf_end;
 	} else {
-		self->state = FSM_END;
-		self->cursor += end;
+		fsm = FSM_END;
+		s_buf_cursor += end;
 		size = end;
 	}
 
-	fwrite(s, 1, size, app.output_file_handle);
-	fflush(app.output_file_handle);
+	fwrite(s, 1, size, output_file_handle);
+	fflush(output_file_handle);
 	return 0;
 }
 
-int s_fsm_normal2(struct serialport_fsm *self)
+int s_fsm_normal2()
 {
 	char *s;
 	int size;
 
-	s = self->buffer + self->cursor;
-	size = self->data_end - self->cursor;
-	self->cursor = self->data_end;
+	s = s_buf + s_buf_cursor;
+	size = s_buf_end - s_buf_cursor;
+	s_buf_cursor = s_buf_end;
 
-	fwrite(s, 1, size, app.output_file_handle);
-	fflush(app.output_file_handle);
+	fwrite(s, 1, size, output_file_handle);
+	fflush(output_file_handle);
 	return 0;
 }
 
-static inline int s_fsm_buffer_empty(struct serialport_fsm *self)
+static inline int s_fsm_buf_empty()
 {
-	return self->cursor == self->data_end;
+	return s_buf_cursor == s_buf_end;
 }
 
 /* This function may call sp_blocking_read, so it can block. */
-void s_fsm_fill_more(struct serialport_fsm *self)
+void s_fsm_fill_more()
 {
-	if (self->data_end > 0 && !s_fsm_buffer_empty(self))
+	if (s_buf_end > 0 && !s_fsm_buf_empty())
 		return;
 
-	self->cursor = 0;
+	s_buf_cursor = 0;
 
 	/*
 	 * `sp_blocking_read` return the number of bytes read on success,
@@ -316,33 +290,33 @@ void s_fsm_fill_more(struct serialport_fsm *self)
 	 * If timeout_ms is zero, the function will always return either
 	 * at least one byte, or a negative error code.
 	 */
-	self->data_end = sp_blocking_read(app.serialport, self->buffer,
-			SERIALPORT_READ_BUFFER_SIZE, 100);
+	s_buf_end = sp_blocking_read(serialport, s_buf,
+			SERIALPORT_BUF_SIZE, 100);
 
-	if (self->data_end < 0)
-		self->state = FSM_READ_ERROR;
+	if (s_buf_end < 0)
+		fsm = FSM_READ_ERROR;
 	else
-		self->buffer[self->data_end] = '\0';
+		s_buf[s_buf_end] = '\0';
 }
 
-int s_fsm_step(struct serialport_fsm *self)
+int s_fsm_step()
 {
 	/*
 	 * extract FSM_END checking out from the switch to avoid unnecessary
 	 * blocking.
 	 */
-	if (self->state == FSM_END)
+	if (fsm == FSM_END)
 		return 1;
 
-	s_fsm_fill_more(self);
+	s_fsm_fill_more();
 
-	switch (self->state) {
+	switch (fsm) {
 	case FSM_WAITING_FOR_START:
-		return s_fsm_wait_for_start(self);
+		return s_fsm_wait_for_start();
 	case FSM_NORMAL1:
-		return s_fsm_normal1(self);
+		return s_fsm_normal1();
 	case FSM_NORMAL2:
-		return s_fsm_normal2(self);
+		return s_fsm_normal2();
 	case FSM_READ_ERROR:
 		fprintf(stderr, "serial port read error\n");
 		return 2;
@@ -353,36 +327,32 @@ int s_fsm_step(struct serialport_fsm *self)
 
 static void *serialport_data_handler(void *data)
 {
-	struct serialport_fsm s_fsm;
-
-	s_fsm_init(&s_fsm, app.start_string, app.end_string);
+	s_fsm_init(start_string, end_string);
 
 	/* `app_running_flag_get` have to be called after `s_fsm_step`. */
-	while (!s_fsm_step(&s_fsm) &&
-			(!s_fsm_buffer_empty(&s_fsm) ||
-			app_running_flag_get(&app)))
+	while (!s_fsm_step() && (!s_fsm_buf_empty() ||
+					app_running_flag_get()))
 		;
 
-	app_debug(&app, "serial port thread finished\n");
+	app_debug("serial port thread finished\n");
 
-	if (s_fsm.state == FSM_READ_ERROR)
+	if (fsm == FSM_READ_ERROR)
 		exit_info(11, "failed reading from serial port\n");
 
-	app_running_flag_set(&app, 0);
+	app_running_flag_set(0);
 	return NULL;
 }
 
 static void *stdin_data_handler(void *data)
 {
-	char buffer[STDIN_READ_BUFFER_SIZE + 1];
-	int has_more;
-	int r;
+	char buffer[STDIN_BUF_SIZE + 1];
+	int has_more = 1, r;
 
 	/*
 	 * If the stdin is not used, this thread should not affect serial port
-	 * thread. So do NOT call `app_running_flag_set(&app, 0)` here.
+	 * thread. So do NOT call `app_running_flag_set(0)` here.
 	 */
-	if (!app.pipe_stdin)
+	if (!pipe_stdin)
 		exit_info(3, "invalid option %lld for stdin piping\n");
 
 	/* New threads defaults to be PTHREAD_CANCEL_ENABLE. */
@@ -390,38 +360,37 @@ static void *stdin_data_handler(void *data)
 	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 	*/
 
-	has_more = 1;
-	while (has_more && app_running_flag_get(&app)) {
-		r = fread(buffer, 1, STDIN_READ_BUFFER_SIZE, stdin);
-		if (r < STDIN_READ_BUFFER_SIZE) {
+	while (has_more && app_running_flag_get()) {
+		r = fread(buffer, 1, STDIN_BUF_SIZE, stdin);
+		if (r < STDIN_BUF_SIZE) {
 			has_more = 0;
 			if (!feof(stdin) && ferror(stdin))
 				exit_info(3, "read error: %d\n", errno);
 		}
-		r = sp_blocking_write(app.serialport, buffer, r, 0);
+		r = sp_blocking_write(serialport, buffer, r, 0);
 		if (r < 0)
 			exit_info(2, "write error\n");
 	}
 
-	app_debug(&app, "stdin thread finished\n");
+	app_debug("stdin thread finished\n");
 
-	app_running_flag_set(&app, 0);
+	app_running_flag_set(0);
 	return NULL;
 }
 
 static void *timeout_handler(void *data)
 {
-	if (app.timeout < 0)
-		exit_info(3, "invalid timeout value %lld\n", app.timeout);
+	if (timeout < 0)
+		exit_info(3, "invalid timeout value %lld\n", timeout);
 
-	while (app.timecount < app.timeout && app_running_flag_get(&app)) {
+	while (timecount < timeout && app_running_flag_get()) {
 		sleep_ms(100);
-		app.timecount += 100;
+		timecount += 100;
 	}
 
-	app_debug(&app, "timeout thread finished\n");
+	app_debug("timeout thread finished\n");
 
-	app_running_flag_set(&app, 0);
+	app_running_flag_set(0);
 	return NULL;
 }
 
@@ -429,23 +398,26 @@ int main(int argc, const char **argv)
 {
 	pthread_t serialport_thread, stdin_thread, timeout_thread;
 
-	parse_arguments(argc, argv, &app);
-	app_init(&app);
+	if (argc == 1)
+		app_usage_and_exit();
 
-	if (app.debug)
-		app_describe(&app);
+	app_get_arguments(argc, argv);
+	app_init();
+
+	if (debug)
+		app_describe();
 
 	if (pthread_create(&serialport_thread, NULL, serialport_data_handler,
 			NULL))
 		exit_info(2, "failed creating serialport thread\n");
 
-	if (app.pipe_stdin) {
+	if (pipe_stdin) {
 		if (pthread_create(&stdin_thread, NULL, stdin_data_handler,
 				NULL))
 			exit_info(2, "failed creating stdin thread\n");
 	}
 
-	if (app.timeout > 0) {
+	if (timeout > 0) {
 		if (pthread_create(&timeout_thread, NULL, timeout_handler,
 				NULL))
 			exit_info(2, "failed creating timeout thread\n");
@@ -454,18 +426,18 @@ int main(int argc, const char **argv)
 	if (pthread_join(serialport_thread, NULL))
 		exit_info(2, "failed joining serial port thread");
 
-	if (app.timeout > 0) {
+	if (timeout > 0) {
 		if (pthread_join(timeout_thread, NULL))
 			exit_info(2, "failed joining timeout thread");
 	}
 
 	/* stdin is working in block mode, thus need to be canceled */
-	if (app.pipe_stdin) {
+	if (pipe_stdin) {
 		if (pthread_cancel(stdin_thread))
 			exit_info(2, "failed canceling stdin thread");
 	}
 
-	app_deinit(&app);
+	app_deinit();
 
 	return 0;
 }
