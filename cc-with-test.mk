@@ -7,6 +7,7 @@ $(addprefix -I, $(C_INCLUDES))
 LD_FLAGS += -Wl,--gc-sections,-Map=$@.map
 
 ifeq ($(MEMCHECK), 1)
+C_FLAGS += -fno-inline -fno-omit-frame-pointer
 MEMORY_CHECK_PROG = valgrind --leak-check=full --track-origins=yes \
 	--error-exitcode=1
 else ifeq ($(MEMCHECK), 2)

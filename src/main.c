@@ -1,7 +1,6 @@
 #include "cmd_argument_parser.h"
-#include "range.h"
 #include "serialport.h"
-#include "str_detector.h"
+#include "str_matcher.h"
 #include "str_fixer.h"
 #include "util.h"
 #include <errno.h>
@@ -135,8 +134,8 @@ void parse_arguments(int argc, const char **argv, struct application *app)
 	if (argc < 3)
 		exit_info(1, "Usage: sp-pipe --port /dev/ttyUSB0 "
 				"--baudrate 115200 "
-				"--start_string 'xxx' --end_string 'yyy' "
-				"--pipe_stdin\n");
+				"--start-string 'xxx' --end-string 'yyy' "
+				"--pipe-stdin\n");
 
 	cmd_argument_parser_init(&parser, argc - 1, argv + 1);
 	/*
@@ -145,16 +144,20 @@ void parse_arguments(int argc, const char **argv, struct application *app)
 
 	app->serialport_device = cmd_argument_parser_get(&parser, "port",
 			NULL);
+
 	app->baudrate = atoi(cmd_argument_parser_get(&parser, "baudrate",
 			"115200"));
-	app->start_string = cmd_argument_parser_get(&parser, "start_string",
-			NULL);
-	app->end_string = cmd_argument_parser_get(&parser, "end_string",
-			NULL);
-	app->output_file = cmd_argument_parser_get(&parser, "output_file",
+
+	app->start_string = cmd_argument_parser_get(&parser, "start-string",
 			NULL);
 
-	app->pipe_stdin = cmd_argument_parser_has(&parser, "pipe_stdin");
+	app->end_string = cmd_argument_parser_get(&parser, "end-string",
+			NULL);
+
+	app->output_file = cmd_argument_parser_get(&parser, "output-file",
+			NULL);
+
+	app->pipe_stdin = cmd_argument_parser_has(&parser, "pipe-stdin");
 
 	cmd_argument_parser_deinit(&parser);
 
@@ -173,9 +176,9 @@ enum serialport_fsm_state {
 struct serialport_fsm {
 	char buffer[SERIALPORT_READ_BUFFER_SIZE + 1];
 	int cursor;
-	int buffer_end;
+	int data_end;
 	enum serialport_fsm_state state;
-	struct str_detector detector;
+	struct str_matcher matcher;
 	const char *start_string;
 	const char *end_string;
 };
@@ -185,61 +188,64 @@ void s_fsm_init(struct serialport_fsm *self,
 {
 	if (start_string != NULL) {
 		self->state = FSM_WAITING_FOR_START;
-		sd_init(&self->detector, start_string);
+		sm_init(&self->matcher, start_string);
 	} else if (end_string != NULL) {
 		self->state = FSM_NORMAL1;
-		sd_init(&self->detector, end_string);
+		sm_init(&self->matcher, end_string);
 	} else {
 		self->state = FSM_NORMAL2;
 	}
 	self->cursor = 0;
-	self->buffer_end = 0;
+	self->data_end = 0;
 	self->start_string = start_string;
 	self->end_string = end_string;
 }
 
 int s_fsm_wait_for_start(struct serialport_fsm *self)
 {
-	struct range r;
+	int start = 0, end = 0, size;
 	char *s;
 
 	s = self->buffer + self->cursor;
-	r = sd_feed(&self->detector, s, self->buffer_end);
-	if (r.start < 0) {
-		self->cursor = self->buffer_end;
+	size = self->data_end - self->cursor;
+	if (sm_feed(&self->matcher, s, size, &start, &end)) {
+		self->cursor = self->data_end;
 		return 1;
 	}
-	fwrite(s + r.start, 1, r.end - r.start, app.output_file_handle);
+
+	self->cursor += end;
+
+	fwrite(s + start, 1, end - start, app.output_file_handle);
 	fflush(app.output_file_handle);
-	self->cursor += r.end;
+
 	if (self->end_string != NULL) {
 		self->state = FSM_NORMAL1;
-		sd_init(&self->detector, self->end_string);
+		sm_init(&self->matcher, self->end_string);
 	} else {
 		self->state = FSM_NORMAL2;
 	}
-	return 1;
+	return 0;
 }
 
 int s_fsm_normal1(struct serialport_fsm *self)
 {
-	struct range r;
+	int start = 0, end = 0, size;
 	char *s;
-	int size;
 
 	s = self->buffer + self->cursor;
-	size = self->buffer_end - self->cursor;
-	r = sd_feed(&self->detector, s, self->buffer_end);
-	if (r.start < 0) {
-		self->cursor = self->buffer_end;
+	size = self->data_end - self->cursor;
+
+	if (sm_feed(&self->matcher, s, size, &start, &end)) {
+		self->cursor = self->data_end;
 	} else {
-		self->cursor += r.end;
-		size = r.end;
 		self->state = FSM_END;
+		self->cursor += end;
+		size = end;
 	}
+
 	fwrite(s, 1, size, app.output_file_handle);
 	fflush(app.output_file_handle);
-	return 1;
+	return 0;
 }
 
 int s_fsm_normal2(struct serialport_fsm *self)
@@ -248,32 +254,42 @@ int s_fsm_normal2(struct serialport_fsm *self)
 	int size;
 
 	s = self->buffer + self->cursor;
-	size = self->buffer_end - self->cursor;
-	self->cursor = self->buffer_end;
+	size = self->data_end - self->cursor;
+	self->cursor = self->data_end;
+
 	fwrite(s, 1, size, app.output_file_handle);
 	fflush(app.output_file_handle);
-
-	return 1;
+	return 0;
 }
 
 static inline int s_fsm_buffer_empty(struct serialport_fsm *self)
 {
-	return self->cursor == self->buffer_end;
+	return self->cursor == self->data_end;
 }
 
 /* This function may call sp_blocking_read, so it can block. */
 void s_fsm_fill_more(struct serialport_fsm *self)
 {
-	if (self->buffer_end > 0 && !s_fsm_buffer_empty(self))
+	if (self->data_end > 0 && !s_fsm_buffer_empty(self))
 		return;
 
 	self->cursor = 0;
-	self->buffer_end = sp_blocking_read(app.serialport, self->buffer,
+
+	/*
+	 * `sp_blocking_read` return the number of bytes read on success,
+	 * or a negative error code.
+	 * If the result is zero, the timeout was reached before any bytes
+	 * were available.
+	 * If timeout_ms is zero, the function will always return either
+	 * at least one byte, or a negative error code.
+	 */
+	self->data_end = sp_blocking_read(app.serialport, self->buffer,
 			SERIALPORT_READ_BUFFER_SIZE, 100);
-	if (self->buffer_end < 0)
+
+	if (self->data_end < 0)
 		self->state = FSM_READ_ERROR;
 	else
-		self->buffer[self->buffer_end] = '\0';
+		self->buffer[self->data_end] = '\0';
 }
 
 int s_fsm_step(struct serialport_fsm *self)
@@ -283,7 +299,7 @@ int s_fsm_step(struct serialport_fsm *self)
 	 * blocking.
 	 */
 	if (self->state == FSM_END)
-		return 0;
+		return 1;
 
 	s_fsm_fill_more(self);
 
@@ -296,7 +312,7 @@ int s_fsm_step(struct serialport_fsm *self)
 		return s_fsm_normal2(self);
 	case FSM_READ_ERROR:
 	default:
-		return 0;
+		return 2;
 	}
 }
 
@@ -307,7 +323,7 @@ static void *serialport_data_handler(void *data)
 	s_fsm_init(&s_fsm, app.start_string, app.end_string);
 
 	/* `app_running_flag_get` have to be called after `s_fsm_step`. */
-	while (s_fsm_step(&s_fsm) &&
+	while (!s_fsm_step(&s_fsm) &&
 			(!s_fsm_buffer_empty(&s_fsm) ||
 			app_running_flag_get(&app)))
 		;
