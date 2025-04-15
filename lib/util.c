@@ -17,12 +17,12 @@ void sleep_ms(int milliseconds)
 #endif
 }
 
-void exit_info(int code, const char *format, ...)
+void exit_info(int code, const char *fmt, ...)
 {
 	va_list args;
 
-	va_start(args, format);
-	vfprintf(stderr, format, args);
+	va_start(args, fmt);
+	vfprintf(stderr, fmt, args);
 	va_end(args);
 
 	exit(code);
