@@ -46,14 +46,14 @@ int sf_step(struct str_fixer *self)
 		return 0;
 	}
 
-	if (*(self->input_cursor + 1) != 'x')
+	if (self->input_cursor[1] != 'x')
 		return -1;
 
-	tmpbuf[0] = *(self->input_cursor + 2);
+	tmpbuf[0] = self->input_cursor[2];
 	if (tmpbuf[0] == '\0')
 		return -2;
 
-	tmpbuf[1] = *(self->input_cursor + 3);
+	tmpbuf[1] = self->input_cursor[3];
 	if (tmpbuf[1] == '\0')
 		return -3;
 
@@ -68,9 +68,7 @@ int sf_convert(struct str_fixer *self)
 	int t;
 	while ((t = sf_step(self)) == 0);
 
-	/* not necessary since self->output is allocated by `calloc`. */
 	*self->output_cursor = '\0';
-
 	if (t == 1)
 		return 0;
 	else
