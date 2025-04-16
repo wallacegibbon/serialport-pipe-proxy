@@ -30,7 +30,7 @@ char debug;				/* Control debug printing */
 struct sp_port *serialport;		/* Main object of `libserialport` */
 int is_running = 1;			/* Thread control */
 pthread_mutex_t is_running_lock;	/* Work with `is_running` */
-FILE *output_stream;		/* Can be STDOUT */
+FILE *output_stream;			/* Can be STDOUT */
 
 static const char *adjust_escaped_string(const char *s)
 {
