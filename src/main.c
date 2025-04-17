@@ -34,9 +34,10 @@ FILE *output_stream;			/* Can be STDOUT */
 static const char *adjust_escaped_string(const char *s)
 {
 	struct str_fixer fixer;
-	int i;
 
-	sf_init(&fixer, s);
+	if (sf_init(&fixer, s))
+		return NULL;
+
 	if (sf_convert(&fixer) == 0)
 		return (const char *)fixer.output;
 	else
