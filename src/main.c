@@ -21,7 +21,6 @@ const char *start_string;		/* The start sign of data */
 const char *end_string;			/* The end sign of data */
 const char *output_file;		/* File to write to */
 long long timeout = -1;			/* Timeout in milliseconds */
-long long timecount;			/* To match with `timeout` */
 char pipe_stdin;			/* STDIN -> Serial Port */
 char debug;				/* Control debug printing */
 
@@ -141,12 +140,11 @@ void app_deinit()
 void app_describe()
 {
 	fprintf(stderr, "application params\n\tport:%s, baudrate:%ld, "
-			"start_string:%s, end_string:%s, "
-			"timeout: %lld, timecount: %lld, "
+			"start_string:%s, end_string:%s, timeout: %lld, "
 			"pipe_stdin: %d, debug: %d\n",
 			serialport_device, baudrate,
-			start_string, end_string,
-			timeout, timecount, pipe_stdin, debug);
+			start_string, end_string, timeout,
+			pipe_stdin, debug);
 }
 
 void app_debug(const char *fmt, ...)
@@ -380,12 +378,22 @@ static void *stdin_data_handler(void *data)
 
 static void *timeout_handler(void *data)
 {
+	unsigned long long t_target = 0, t = 0;
+
 	if (timeout < 0)
 		exit_info(3, "invalid timeout value %lld\n", timeout);
 
-	while (timecount < timeout && app_get_running()) {
+	if (uptime_ms(&t_target))
+		exit_info(3, "failed getting t_target\n");
+
+	t_target += timeout;
+
+	while (t < t_target && app_get_running()) {
 		sleep_ms(100);
-		timecount += 100;
+		if (uptime_ms(&t)) {
+			fprintf(stderr, "failed getting t\n");
+			break;
+		}
 	}
 
 	app_debug("timeout thread finished\n");
