@@ -389,7 +389,8 @@ static void *timeout_handler(void *data)
 	t_target += timeout;
 
 	while (t < t_target && app_get_running()) {
-		sleep_ms(100);
+		if (sleep_ms(100))
+			fprintf(stderr, "failed sleeping\n");
 		if (uptime_ms(&t)) {
 			fprintf(stderr, "failed getting t\n");
 			break;
